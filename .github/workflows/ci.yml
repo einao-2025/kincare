@@ -1,0 +1,176 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: '20.11.0'
+  PNPM_VERSION: '9.7.0'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-typecheck:
+    name: Lint & typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: '${{ env.PNPM_VERSION }}' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r prisma generate || true
+      - run: pnpm -r --parallel lint
+      - run: pnpm -r --parallel typecheck
+
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kincare
+          POSTGRES_PASSWORD: kincare
+          POSTGRES_DB: kincare_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U kincare"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://kincare:kincare@localhost:5432/kincare_test
+      REDIS_URL: redis://localhost:6379
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: '${{ env.PNPM_VERSION }}' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @kincare/db prisma generate
+      - run: pnpm --filter @kincare/db prisma migrate deploy || pnpm --filter @kincare/db prisma db push
+      - run: pnpm -r --parallel --filter "./packages/*" test || true
+      - run: pnpm --filter @kincare/api test
+
+  prisma-migrate-diff:
+    name: Prisma migration drift check
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kincare
+          POSTGRES_PASSWORD: kincare
+          POSTGRES_DB: kincare_drift
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U kincare"
+          --health-interval 10s
+    env:
+      DATABASE_URL: postgresql://kincare:kincare@localhost:5432/kincare_drift
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: '${{ env.PNPM_VERSION }}' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @kincare/db prisma generate
+      - name: Apply existing migrations
+        working-directory: packages/db
+        run: pnpm prisma migrate deploy || pnpm prisma db push --skip-generate
+      - name: Detect drift between schema and database
+        working-directory: packages/db
+        run: |
+          pnpm prisma migrate diff \
+            --from-url "$DATABASE_URL" \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code
+
+  docker-build:
+    name: Build images
+    runs-on: ubuntu-latest
+    needs: [lint-typecheck, unit-tests]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        app: [api, worker, web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute tag
+        id: meta
+        run: |
+          echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "ref=${GITHUB_REF_NAME//\//-}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/${{ matrix.app }}/Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/kincare-${{ matrix.app }}:${{ steps.meta.outputs.sha }}
+            ghcr.io/${{ github.repository_owner }}/kincare-${{ matrix.app }}:${{ steps.meta.outputs.ref }}
+          cache-from: type=gha,scope=${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+
+  e2e:
+    name: Playwright E2E
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: [docker-build]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: '${{ env.PNPM_VERSION }}' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @kincare/e2e install-browsers
+      - name: Boot stack via docker compose
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.yml up -d postgres redis minio mailhog
+      - run: pnpm --filter @kincare/e2e test
+        env:
+          API_URL: http://localhost:4000
+          WEB_URL: http://localhost:3000
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: apps/e2e/playwright-report

@@ -1,0 +1,1005 @@
+// ─────────────────────────────────────────────────────────────────
+// Kincare Prisma Schema
+// Healthcare data models aligned with HL7 FHIR R4 resources.
+// All sensitive PHI fields are intended to be encrypted at the
+// application layer (see @kincare/shared/crypto).
+// ─────────────────────────────────────────────────────────────────
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ──────────────────────────── ENUMS ─────────────────────────────
+
+enum UserRole {
+  PATIENT
+  FAMILY_DELEGATE
+  DOCTOR
+  NURSE
+  PHARMACIST
+  LAB_TECHNICIAN
+  RADIOLOGIST
+  HOSPITAL_ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  UNKNOWN
+}
+
+enum BloodGroup {
+  A_POS
+  A_NEG
+  B_POS
+  B_NEG
+  AB_POS
+  AB_NEG
+  O_POS
+  O_NEG
+  UNKNOWN
+}
+
+enum Genotype {
+  AA
+  AS
+  SS
+  AC
+  SC
+  CC
+  UNKNOWN
+}
+
+enum RelationshipType {
+  SPOUSE
+  PARENT
+  CHILD
+  SIBLING
+  GUARDIAN
+  CAREGIVER
+  OTHER
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+enum PermissionScope {
+  VIEW_DEMOGRAPHICS
+  VIEW_MEDICAL_HISTORY
+  VIEW_PRESCRIPTIONS
+  REQUEST_REFILL
+  AUTHORIZE_PICKUP
+  VIEW_TEST_RESULTS
+  VIEW_IMAGING
+  RECEIVE_PROGRESS_UPDATES
+  EMERGENCY_ACCESS
+}
+
+enum PrescriptionStatus {
+  DRAFT
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+  ENTERED_IN_ERROR
+}
+
+enum RefillRequestStatus {
+  PENDING
+  APPROVED
+  DENIED
+  DISPENSED
+  PICKED_UP
+  CANCELLED
+}
+
+enum DispenseStatus {
+  PREPARING
+  READY_FOR_PICKUP
+  DISPENSED
+  RETURNED
+}
+
+enum TestResultStatus {
+  REGISTERED
+  PRELIMINARY
+  FINAL
+  AMENDED
+  CORRECTED
+  CANCELLED
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  IN_APP
+  PUSH
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+  READ
+}
+
+enum AuditAction {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  LOGIN_FAILED
+  MFA_CHALLENGE
+  EXPORT
+  DOWNLOAD
+  GRANT_PERMISSION
+  REVOKE_PERMISSION
+  CONSENT_GIVEN
+  CONSENT_WITHDRAWN
+  PRESCRIBE
+  DISPENSE
+  REFILL_REQUEST
+  STATUS_UPDATE
+}
+
+enum ConsentStatus {
+  ACTIVE
+  WITHDRAWN
+  EXPIRED
+  REJECTED
+}
+
+enum EncounterClass {
+  AMBULATORY
+  EMERGENCY
+  INPATIENT
+  OUTPATIENT
+  HOMEHEALTH
+  VIRTUAL
+}
+
+enum EncounterStatus {
+  PLANNED
+  ARRIVED
+  IN_PROGRESS
+  ONLEAVE
+  FINISHED
+  CANCELLED
+}
+
+// ────────────────────────── CORE: USER ──────────────────────────
+
+model Tenant {
+  id          String   @id @default("default")
+  slug        String   @unique
+  name        String
+  status      String   @default("ACTIVE")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       User[]
+  patients    PatientProfile[]
+  hl7Messages HL7Message[]
+  auditLogs   AuditLog[]
+
+  @@map("tenants")
+}
+
+model User {
+  id                 String     @id @default(uuid()) @db.Uuid
+  email              String
+  phone              String?
+  passwordHash       String
+  role               UserRole
+  status             UserStatus @default(PENDING_VERIFICATION)
+
+  // Multi-tenant scoping (Phase 5). All queries should include tenantId via
+  // the request-scoped TenantContext. Email uniqueness is per tenant.
+  tenantId           String     @default("default")
+  tenant             Tenant?    @relation(fields: [tenantId], references: [id])
+
+  firstName          String
+  lastName           String
+  displayName        String?
+
+  emailVerifiedAt    DateTime?
+  phoneVerifiedAt    DateTime?
+
+  // MFA
+  mfaEnabled         Boolean    @default(false)
+  mfaSecretEnc       String?    // encrypted TOTP secret
+  mfaRecoveryCodes   String[]   @default([])
+
+  lastLoginAt        DateTime?
+  failedLoginCount   Int        @default(0)
+  lockedUntil        DateTime?
+
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+  deletedAt          DateTime?
+  createdById        String?    @db.Uuid
+  updatedById        String?    @db.Uuid
+
+  // Relations
+  patientProfile     PatientProfile?
+  practitioner       Practitioner?
+  sessions           Session[]
+  refreshTokens      RefreshToken[]
+  notifications      Notification[]
+  auditLogs          AuditLog[]      @relation("AuditActor")
+  consents           ConsentRecord[]
+
+  // Family graph
+  invitesSent        FamilyInvite[]      @relation("InviteFromUser")
+  invitesReceived    FamilyInvite[]      @relation("InviteToUser")
+  delegateOf         FamilyRelationship[] @relation("DelegateUser")
+  hasDelegates       FamilyRelationship[] @relation("PatientUser")
+  permissionGrants   PermissionGrant[]   @relation("GranteeUser")
+  permissionsGranted PermissionGrant[]   @relation("GrantorUser")
+
+  @@index([role, status])
+  @@index([deletedAt])
+  @@unique([tenantId, email])
+  @@unique([tenantId, phone])
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @db.Uuid
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceLabel  String?
+  userAgent    String?
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+  revokedAt    DateTime?
+
+  refreshTokens RefreshToken[]
+
+  @@index([userId, revokedAt])
+  @@map("sessions")
+}
+
+model RefreshToken {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @db.Uuid
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId   String   @db.Uuid
+  session     Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  tokenHash   String   @unique               // SHA-256 of refresh token
+  expiresAt   DateTime
+  rotatedAt   DateTime?                       // when this token was rotated to a new one
+  revokedAt   DateTime?
+  replacedById String? @db.Uuid
+  createdAt   DateTime @default(now())
+
+  @@index([userId, revokedAt])
+  @@map("refresh_tokens")
+}
+
+// ────────────────────── FHIR: PATIENT ──────────────────────────
+
+model PatientProfile {
+  id                 String      @id @default(uuid()) @db.Uuid
+  userId             String      @unique @db.Uuid
+  user               User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Multi-tenant scoping; MRN uniqueness becomes (tenantId, mrn).
+  tenantId           String      @default("default")
+  tenant             Tenant?     @relation(fields: [tenantId], references: [id])
+
+  mrn                String                        // Medical Record Number
+  dateOfBirth        DateTime
+  gender             Gender      @default(UNKNOWN)
+  bloodGroup         BloodGroup  @default(UNKNOWN)
+  genotype           Genotype    @default(UNKNOWN)
+
+  // PHI — encrypted at application layer (string ciphertext)
+  addressLine1Enc    String?
+  addressLine2Enc    String?
+  cityEnc            String?
+  stateEnc           String?
+  postalCodeEnc      String?
+  countryEnc         String?
+  nationalIdEnc      String?
+
+  emergencyContacts  EmergencyContact[]
+  allergies          AllergyIntolerance[]
+  conditions         Condition[]
+  procedures         Procedure[]
+  immunizations      Immunization[]
+  encounters         Encounter[]
+  observations       Observation[]
+  diagnosticReports  DiagnosticReport[]
+  prescriptions      Prescription[]
+  refillRequests     PrescriptionRefillRequest[]
+  testResults        TestResult[]
+  dicomStudies       DICOMStudy[]
+  careTeams          CareTeamMember[]
+  progressUpdates    ProgressUpdate[]
+
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+  deletedAt          DateTime?
+
+  @@index([deletedAt])
+  @@unique([tenantId, mrn])
+  @@map("patient_profiles")
+}
+
+model EmergencyContact {
+  id          String   @id @default(uuid()) @db.Uuid
+  patientId   String   @db.Uuid
+  patient     PatientProfile @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  name        String
+  relation    RelationshipType
+  phone       String
+  email       String?
+  priority    Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([patientId])
+  @@map("emergency_contacts")
+}
+
+// ────────────────── FHIR: PRACTITIONER ──────────────────────────
+
+model Practitioner {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @unique @db.Uuid
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  licenseNumber   String   @unique
+  specialty       String?
+  department      String?
+  npi             String?  // National Provider Identifier (where applicable)
+
+  prescriptions   Prescription[]      @relation("PrescriberPractitioner")
+  reportsAuthored DiagnosticReport[]  @relation("ReportAuthor")
+  conditions      Condition[]         @relation("RecordedBy")
+  procedures      Procedure[]         @relation("PerformedBy")
+  observations    Observation[]       @relation("PerformedByPractitioner")
+  encounters      Encounter[]         @relation("AttendingPractitioner")
+  careTeams       CareTeamMember[]
+  progressUpdates ProgressUpdate[]    @relation("UpdateAuthor")
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  @@map("practitioners")
+}
+
+// ─────────────── FAMILY LINKING / RBAC GRANTS ───────────────────
+
+model FamilyInvite {
+  id            String       @id @default(uuid()) @db.Uuid
+  fromUserId    String       @db.Uuid
+  fromUser      User         @relation("InviteFromUser", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUserId      String?      @db.Uuid
+  toUser        User?        @relation("InviteToUser", fields: [toUserId], references: [id])
+  inviteEmail   String
+  invitePhone   String?
+  relation      RelationshipType
+  proposedScopes PermissionScope[]
+  tokenHash     String       @unique
+  status        InviteStatus @default(PENDING)
+  expiresAt     DateTime
+  acceptedAt    DateTime?
+  revokedAt     DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([toUserId, status])
+  @@map("family_invites")
+}
+
+model FamilyRelationship {
+  id          String           @id @default(uuid()) @db.Uuid
+  patientUserId  String        @db.Uuid
+  patient        User          @relation("PatientUser", fields: [patientUserId], references: [id], onDelete: Cascade)
+  delegateUserId String        @db.Uuid
+  delegate       User          @relation("DelegateUser", fields: [delegateUserId], references: [id], onDelete: Cascade)
+  relation       RelationshipType
+  isPrimary      Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  revokedAt      DateTime?
+
+  grants         PermissionGrant[]
+
+  @@unique([patientUserId, delegateUserId])
+  @@index([delegateUserId])
+  @@map("family_relationships")
+}
+
+model PermissionGrant {
+  id              String           @id @default(uuid()) @db.Uuid
+  relationshipId  String           @db.Uuid
+  relationship    FamilyRelationship @relation(fields: [relationshipId], references: [id], onDelete: Cascade)
+  grantorUserId   String           @db.Uuid
+  grantor         User             @relation("GrantorUser", fields: [grantorUserId], references: [id])
+  granteeUserId   String           @db.Uuid
+  grantee         User             @relation("GranteeUser", fields: [granteeUserId], references: [id])
+  scope           PermissionScope
+  grantedAt       DateTime         @default(now())
+  expiresAt       DateTime?
+  revokedAt       DateTime?
+  reason          String?
+
+  @@unique([relationshipId, scope])
+  @@index([granteeUserId, scope, revokedAt])
+  @@map("permission_grants")
+}
+
+// ────────────────────── FHIR: ENCOUNTER ─────────────────────────
+
+model Encounter {
+  id              String          @id @default(uuid()) @db.Uuid
+  patientId       String          @db.Uuid
+  patient         PatientProfile  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  practitionerId  String?         @db.Uuid
+  practitioner    Practitioner?   @relation("AttendingPractitioner", fields: [practitionerId], references: [id])
+
+  class           EncounterClass  @default(AMBULATORY)
+  status          EncounterStatus @default(PLANNED)
+  reasonCode      String?
+  reasonText      String?
+  startAt         DateTime
+  endAt           DateTime?
+  location        String?
+
+  observations    Observation[]
+  reports         DiagnosticReport[]
+  procedures      Procedure[]
+  prescriptions   Prescription[]
+  progressUpdates ProgressUpdate[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  @@index([patientId, startAt])
+  @@map("encounters")
+}
+
+// ─────────────── FHIR: MEDICAL HISTORY RESOURCES ────────────────
+
+model AllergyIntolerance {
+  id          String   @id @default(uuid()) @db.Uuid
+  patientId   String   @db.Uuid
+  patient     PatientProfile @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  substance   String
+  reaction    String?
+  severity    String?  // mild | moderate | severe
+  recordedAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  @@index([patientId])
+  @@map("allergy_intolerances")
+}
+
+model Condition {
+  id              String   @id @default(uuid()) @db.Uuid
+  patientId       String   @db.Uuid
+  patient         PatientProfile @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  recordedById    String?  @db.Uuid
+  recordedBy      Practitioner? @relation("RecordedBy", fields: [recordedById], references: [id])
+  code            String   // ICD-10 / SNOMED
+  display         String
+  clinicalStatus  String   @default("active")  // active | recurrence | inactive | resolved
+  onsetDate       DateTime?
+  abatementDate   DateTime?
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  @@index([patientId, clinicalStatus])
+  @@map("conditions")
+}
+
+model Procedure {
+  id              String   @id @default(uuid()) @db.Uuid
+  patientId       String   @db.Uuid
+  patient         PatientProfile @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  encounterId     String?  @db.Uuid
+  encounter       Encounter? @relation(fields: [encounterId], references: [id])
+  performedById   String?  @db.Uuid
+  performedBy     Practitioner? @relation("PerformedBy", fields: [performedById], references: [id])
+  code            String
+  display         String
+  performedAt     DateTime
+  outcome         String?
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  @@index([patientId, performedAt])
+  @@map("procedures")
+}
+
+model Immunization {
+  id           String   @id @default(uuid()) @db.Uuid
+  patientId    String   @db.Uuid
+  patient      PatientProfile @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  vaccineCode  String
+  vaccineName  String
+  administeredAt DateTime
+  lotNumber    String?
+  doseNumber   Int?
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  deletedAt    DateTime?
+
+  @@index([patientId])
+  @@map("immunizations")
+}
+
+model Observation {
+  id              String   @id @default(uuid()) @db.Uuid
+  patientId       String   @db.Uuid
+  patient         PatientProfile @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  encounterId     String?  @db.Uuid
+  encounter       Encounter? @relation(fields: [encounterId], references: [id])
+  performedById   String?  @db.Uuid
+  performedBy     Practitioner? @relation("PerformedByPractitioner", fields: [performedById], references: [id])
+
+  code            String   // LOINC code
+  display         String
+  category        String?  // vital-signs | laboratory | imaging | etc.
+  valueNumeric    Decimal? @db.Decimal(20, 6)
+  valueString     String?
+  unit            String?
+  referenceLow    Decimal? @db.Decimal(20, 6)
+  referenceHigh   Decimal? @db.Decimal(20, 6)
+  effectiveAt     DateTime
+  status          String   @default("final")
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  @@index([patientId, code, effectiveAt])
+  @@map("observations")
+}
+
+// ───────────── FHIR: DiagnosticReport / TestResult ──────────────
+
+model DiagnosticReport {
+  id              String   @id @default(uuid()) @db.Uuid
+  patientId       String   @db.Uuid
+  patient         PatientProfile @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  encounterId     String?  @db.Uuid
+  encounter       Encounter? @relation(fields: [encounterId], references: [id])
+  authorId        String?  @db.Uuid
+  author          Practitioner? @relation("ReportAuthor", fields: [authorId], references: [id])
+
+  code            String
+  display         String
+  category        String?
+  status          TestResultStatus @default(REGISTERED)
+  conclusion      String?
+  issuedAt        DateTime @default(now())
+
+  testResults     TestResult[]
+  attachments     ReportAttachment[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  @@index([patientId, issuedAt])
+  @@map("diagnostic_reports")
+}
+
+model TestResult {
+  id              String   @id @default(uuid()) @db.Uuid
+  patientId       String   @db.Uuid
+  patient         PatientProfile @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  reportId        String?  @db.Uuid
+  report          DiagnosticReport? @relation(fields: [reportId], references: [id])
+
+  testName        String
+  testCode        String?  // LOINC
+  resultValue     String
+  unit            String?
+  referenceRange  String?
+  flag            String?  // H | L | A
+  status          TestResultStatus @default(FINAL)
+  performedAt     DateTime
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  @@index([patientId, performedAt])
+  @@map("test_results")
+}
+
+model ReportAttachment {
+  id          String   @id @default(uuid()) @db.Uuid
+  reportId    String   @db.Uuid
+  report      DiagnosticReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  fileName    String
+  contentType String
+  bytes       Int
+  s3Bucket    String
+  s3Key       String
+  sha256      String
+  createdAt   DateTime @default(now())
+
+  @@index([reportId])
+  @@map("report_attachments")
+}
+
+// ──────────── FHIR: Medication / Prescription Workflow ──────────
+
+model Prescription {
+  id              String              @id @default(uuid()) @db.Uuid
+  patientId       String              @db.Uuid
+  patient         PatientProfile      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  prescriberId    String              @db.Uuid
+  prescriber      Practitioner        @relation("PrescriberPractitioner", fields: [prescriberId], references: [id])
+  encounterId     String?             @db.Uuid
+  encounter       Encounter?          @relation(fields: [encounterId], references: [id])
+
+  medicationCode  String              // RxNorm code
+  medicationName  String
+  dosage          String              // e.g., "500 mg"
+  route           String?             // oral, IV, etc.
+  frequency       String              // e.g., "BID"
+  durationDays    Int?
+  quantity        Int
+  refillsAllowed  Int                 @default(0)
+  refillsUsed     Int                 @default(0)
+  status          PrescriptionStatus  @default(ACTIVE)
+  notes           String?
+  prescribedAt    DateTime            @default(now())
+  expiresAt       DateTime?
+
+  refillRequests  PrescriptionRefillRequest[]
+  dispenses       MedicationDispense[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  @@index([patientId, status])
+  @@map("prescriptions")
+}
+
+model PrescriptionRefillRequest {
+  id              String              @id @default(uuid()) @db.Uuid
+  prescriptionId  String              @db.Uuid
+  prescription    Prescription        @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  patientId       String              @db.Uuid
+  patient         PatientProfile      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  requestedByUserId String            @db.Uuid
+  status          RefillRequestStatus @default(PENDING)
+  notes           String?
+
+  // Pickup authorization
+  authorizedPickupUserId String?      @db.Uuid    // delegated family member
+  pickupCode      String?             @unique     // one-time code shown at pharmacy
+  pickupCodeExpiresAt DateTime?
+  pickedUpAt      DateTime?
+  pickedUpByName  String?
+  pickedUpByIdRef String?             // ID document reference shown at pickup
+
+  approvedAt      DateTime?
+  approvedByUserId String?            @db.Uuid
+  deniedReason    String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  dispense        MedicationDispense?
+
+  @@index([patientId, status])
+  @@map("prescription_refill_requests")
+}
+
+model MedicationDispense {
+  id              String   @id @default(uuid()) @db.Uuid
+  prescriptionId  String   @db.Uuid
+  prescription    Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  refillRequestId String?  @unique @db.Uuid
+  refillRequest   PrescriptionRefillRequest? @relation(fields: [refillRequestId], references: [id])
+  pharmacistUserId String  @db.Uuid
+  status          DispenseStatus @default(PREPARING)
+  quantityDispensed Int
+  dispensedAt     DateTime?
+  lotNumber       String?
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("medication_dispenses")
+}
+
+// ────────────────────── FHIR: CareTeam ──────────────────────────
+
+model CareTeamMember {
+  id              String   @id @default(uuid()) @db.Uuid
+  patientId       String   @db.Uuid
+  patient         PatientProfile @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  practitionerId  String   @db.Uuid
+  practitioner    Practitioner   @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  role            String          // e.g., "primary-care", "consulting"
+  startedAt       DateTime @default(now())
+  endedAt         DateTime?
+
+  @@unique([patientId, practitionerId, role])
+  @@index([patientId])
+  @@map("care_team_members")
+}
+
+// ─────────────────── PROGRESS UPDATES ───────────────────────────
+
+model ProgressUpdate {
+  id            String   @id @default(uuid()) @db.Uuid
+  patientId     String   @db.Uuid
+  patient       PatientProfile @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  encounterId   String?  @db.Uuid
+  encounter     Encounter? @relation(fields: [encounterId], references: [id])
+  authorId      String   @db.Uuid
+  author        Practitioner @relation("UpdateAuthor", fields: [authorId], references: [id])
+  category      String   // ADMISSION | PROCEDURE_COMPLETED | DISCHARGE | STATUS
+  title         String
+  message       String
+  notifyFamily  Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  @@index([patientId, createdAt])
+  @@map("progress_updates")
+}
+
+// ───────────────────── NOTIFICATIONS ────────────────────────────
+
+model Notification {
+  id          String              @id @default(uuid()) @db.Uuid
+  userId      String              @db.Uuid
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel     NotificationChannel
+  status      NotificationStatus  @default(QUEUED)
+  subject     String?
+  body        String
+  metadata    Json?
+  externalId  String?             // provider message id
+  readAt      DateTime?
+  sentAt      DateTime?
+  failedReason String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+// ───────────────────── AUDIT LOG (FHIR AuditEvent) ──────────────
+
+model AuditLog {
+  id            String       @id @default(uuid()) @db.Uuid
+  occurredAt    DateTime     @default(now())
+  action        AuditAction
+  actorUserId   String?      @db.Uuid
+  actor         User?        @relation("AuditActor", fields: [actorUserId], references: [id])
+  actorRole     UserRole?
+  tenantId      String       @default("default")
+  tenant        Tenant?      @relation(fields: [tenantId], references: [id])
+  resourceType  String       // e.g., "Patient", "Prescription"
+  resourceId    String?
+  patientId     String?      @db.Uuid       // subject of the access for fast lookup
+  outcome       String       @default("success")  // success | failure
+  ipAddress     String?
+  userAgent     String?
+  requestId     String?
+  metadata      Json?
+
+  // Tamper evidence: chained hash
+  prevHash      String?
+  hash          String       @unique
+
+  @@index([patientId, occurredAt])
+  @@index([actorUserId, occurredAt])
+  @@index([resourceType, resourceId])
+  @@index([tenantId, occurredAt])
+  @@map("audit_logs")
+}
+
+// ───────────────────── CONSENT (FHIR Consent) ───────────────────
+
+model ConsentRecord {
+  id            String        @id @default(uuid()) @db.Uuid
+  userId        String        @db.Uuid
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scope         String        // e.g., "data-sharing", "research", "marketing"
+  policyVersion String
+  status        ConsentStatus @default(ACTIVE)
+  givenAt       DateTime      @default(now())
+  withdrawnAt   DateTime?
+  expiresAt     DateTime?
+  evidenceHash  String?       // hash of signed consent document
+  metadata      Json?
+
+  @@index([userId, scope, status])
+  @@map("consent_records")
+}
+
+// ───────────────────── DICOM IMAGING ────────────────────────────
+
+model DICOMStudy {
+  id                String        @id @default(uuid()) @db.Uuid
+  patientId         String        @db.Uuid
+  patient           PatientProfile @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  studyInstanceUID  String        @unique
+  accessionNumber   String?
+  studyDate         DateTime?
+  studyDescription  String?
+  modality          String?       // CT | MR | CR | US | etc.
+  referringPhysician String?
+  orthancStudyId    String?       @unique
+  numberOfSeries    Int           @default(0)
+  numberOfInstances Int           @default(0)
+
+  series            DICOMSeries[]
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  deletedAt         DateTime?
+
+  @@index([patientId, studyDate])
+  @@map("dicom_studies")
+}
+
+model DICOMSeries {
+  id                String   @id @default(uuid()) @db.Uuid
+  studyId           String   @db.Uuid
+  study             DICOMStudy @relation(fields: [studyId], references: [id], onDelete: Cascade)
+  seriesInstanceUID String   @unique
+  seriesNumber      Int?
+  modality          String?
+  bodyPart          String?
+  description       String?
+  orthancSeriesId   String?  @unique
+  numberOfInstances Int      @default(0)
+
+  instances         DICOMInstance[]
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([studyId])
+  @@map("dicom_series")
+}
+
+model DICOMInstance {
+  id                  String   @id @default(uuid()) @db.Uuid
+  seriesId            String   @db.Uuid
+  series              DICOMSeries @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  sopInstanceUID      String   @unique
+  instanceNumber      Int?
+  orthancInstanceId   String?  @unique
+  s3Bucket            String?
+  s3Key               String?
+  sha256              String?
+
+  createdAt           DateTime @default(now())
+
+  @@index([seriesId, instanceNumber])
+  @@map("dicom_instances")
+}
+
+// ───────────────── HL7 v2 RAW MESSAGE LOG ───────────────────────
+
+model HL7Message {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @default("default")
+  tenant        Tenant?  @relation(fields: [tenantId], references: [id])
+  messageType   String   // e.g., "ADT^A01"
+  controlId     String   @unique
+  sendingApp    String?
+  sendingFacility String?
+  receivedAt    DateTime @default(now())
+  rawMessage    String   @db.Text
+  parsedJson    Json?
+  processed     Boolean  @default(false)
+  processedAt   DateTime?
+  errorMessage  String?
+
+  @@index([messageType, processed])
+  @@index([tenantId, receivedAt])
+  @@map("hl7_messages")
+}
+
+// ─────────────── SMART-on-FHIR / OAuth2 (Phase 5) ───────────────
+
+/// Registered third-party application that can launch against this FHIR
+/// endpoint via SMART App Launch. Confidential clients store a hashed
+/// client_secret; public clients (mobile / SPA) require PKCE.
+model OAuthClient {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @default("default")
+  clientId      String   @unique
+  clientSecretHash String?            // null = public client (PKCE required)
+  name          String
+  redirectUris  String[]              // exact-match list per RFC 6749
+  scopes        String                // space-separated SMART scopes (e.g. "launch/patient openid fhirUser patient/*.read")
+  jwksUri       String?               // for backend services profile (asymmetric client auth)
+  isConfidential Boolean              @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  revokedAt     DateTime?
+
+  authCodes     OAuthAuthCode[]
+  accessTokens  OAuthAccessToken[]
+
+  @@index([tenantId])
+  @@map("oauth_clients")
+}
+
+model OAuthAuthCode {
+  id            String   @id @default(uuid()) @db.Uuid
+  clientId      String   @db.Uuid
+  client        OAuthClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  userId        String   @db.Uuid
+  codeHash      String   @unique             // sha256 of the issued code
+  redirectUri   String
+  scopes        String
+  patientId     String?  @db.Uuid             // launch context: patient/*
+  encounterId   String?  @db.Uuid             // launch context: encounter/*
+  codeChallenge String?
+  codeChallengeMethod String?                 // "S256" (preferred) | "plain"
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  createdAt     DateTime @default(now())
+
+  @@index([clientId, expiresAt])
+  @@map("oauth_auth_codes")
+}
+
+model OAuthAccessToken {
+  id          String   @id @default(uuid()) @db.Uuid
+  clientId    String   @db.Uuid
+  client      OAuthClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  userId      String   @db.Uuid
+  tokenHash   String   @unique                // sha256 of access JWT id
+  scopes      String
+  patientId   String?  @db.Uuid
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([clientId, userId])
+  @@map("oauth_access_tokens")
+}

@@ -1,0 +1,72 @@
+{{- if .Values.api.enabled }}
+{{- $component := "api" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kincare.fullname" . }}-{{ $component }}
+  labels: {{- include "kincare.componentLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" $component) | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "kincare.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: {{ $component }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "kincare.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: {{ $component }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "kincare.fullname" . }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: prisma-migrate
+          image: {{ include "kincare.image" (dict "image" .Values.api.image "Values" .Values "Chart" .Chart) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["node", "node_modules/prisma/build/index.js", "migrate", "deploy"]
+          envFrom:
+            - configMapRef: { name: {{ include "kincare.configMapName" . }} }
+            - secretRef:    { name: {{ include "kincare.secretName" . }} }
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+      containers:
+        - name: api
+          image: {{ include "kincare.image" (dict "image" .Values.api.image "Values" .Values "Chart" .Chart) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - { name: http, containerPort: {{ .Values.api.port }} }
+            {{- if .Values.api.hl7Mllp.enabled }}
+            - { name: mllp, containerPort: {{ .Values.api.hl7Mllp.port }} }
+            {{- end }}
+          envFrom:
+            - configMapRef: { name: {{ include "kincare.configMapName" . }} }
+            - secretRef:    { name: {{ include "kincare.secretName" . }} }
+          env:
+            - name: API_PORT
+              value: {{ .Values.api.port | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: kincare-api
+            {{- range $k, $v := .Values.api.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{- toYaml .Values.api.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+{{- end }}

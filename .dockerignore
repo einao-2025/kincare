@@ -1,0 +1,17 @@
+node_modules
+.next
+.turbo
+dist
+.git
+.github
+.vscode
+**/coverage
+**/playwright-report
+**/test-results
+*.log
+.env
+.env.*
+!.env.example
+README.md
+docker-compose.yml
+infra/helm

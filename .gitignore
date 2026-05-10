@@ -1,0 +1,35 @@
+# ─── Node / Next ───
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+.turbo/
+*.tsbuildinfo
+
+# ─── Env / Secrets ───
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ─── Logs ───
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# ─── OS / IDE ───
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ─── Prisma ───
+packages/db/prisma/migrations/dev.db*
+
+# ─── Uploads (local dev only) ───
+uploads/
+tmp/

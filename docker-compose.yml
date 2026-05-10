@@ -1,0 +1,69 @@
+name: kincare-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kincare
+      POSTGRES_PASSWORD: kincare
+      POSTGRES_DB: kincare
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kincare"]
+      interval: 5s
+
+  # Transaction-pooled connection pooler for Postgres. Apps should connect
+  # here in production; migrations should bypass it via DIRECT_DATABASE_URL.
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.23.1-p3
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: kincare
+      DB_PASSWORD: kincare
+      DB_NAME: kincare
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "1000"
+      DEFAULT_POOL_SIZE: "25"
+      AUTH_TYPE: scram-sha-256
+    ports: ["6432:5432"]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports: ["6379:6379"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s }
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: kincare
+      MINIO_ROOT_PASSWORD: kincare-secret
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [miniodata:/data]
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports: ["1025:1025", "8025:8025"]
+
+  orthanc:
+    image: orthancteam/orthanc:24.7.3
+    restart: unless-stopped
+    ports: ["8042:8042", "4242:4242"]
+    environment:
+      ORTHANC__REGISTERED_USERS: |
+        {"orthanc": "orthanc"}
+      ORTHANC__DICOM_WEB__ENABLE: "true"
+    volumes: [orthancdb:/var/lib/orthanc/db]
+
+volumes:
+  pgdata:
+  miniodata:
+  orthancdb:

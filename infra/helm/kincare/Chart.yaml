@@ -1,0 +1,13 @@
+apiVersion: v2
+name: kincare
+description: Hospital patient portal & healthcare interoperability platform
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - healthcare
+  - fhir
+  - hl7
+  - patient-portal
+maintainers:
+  - name: Kincare Platform Team

@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light; }
+html, body { height: 100%; }
+body {
+  @apply bg-clinical-bg text-clinical-text antialiased;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}

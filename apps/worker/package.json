@@ -1,0 +1,38 @@
+{
+  "name": "@kincare/worker",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@kincare/db": "workspace:*",
+    "@kincare/hl7": "workspace:*",
+    "@kincare/notifications": "workspace:*",
+    "@kincare/shared": "workspace:*",
+    "@aws-sdk/client-s3": "^3.621.0",
+    "@aws-sdk/s3-request-presigner": "^3.621.0",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.50.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.53.0",
+    "@opentelemetry/resources": "^1.26.0",
+    "@opentelemetry/sdk-node": "^0.53.0",
+    "@opentelemetry/semantic-conventions": "^1.27.0",
+    "bullmq": "^5.12.0",
+    "ioredis": "^5.4.1",
+    "pino": "^9.3.2",
+    "pino-loki": "^2.3.1",
+    "pino-pretty": "^11.2.2",
+    "prom-client": "^15.1.3",
+    "puppeteer": "^22.15.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.4",
+    "@types/node": "^20.14.13"
+  }
+}

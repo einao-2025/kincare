@@ -1,0 +1,14 @@
+{
+  "name": "@kincare/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "install-browsers": "playwright install --with-deps chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.45.3",
+    "typescript": "^5.5.4"
+  }
+}

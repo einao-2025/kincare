@@ -1,0 +1,162 @@
+# Default values for the Kincare Helm chart.
+# Override per-environment via -f values-production.yaml, -f values-staging.yaml, etc.
+
+global:
+  imageRegistry: ghcr.io/your-org
+  imageTag: ""              # falls back to .Chart.AppVersion
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+  domain: kincare.health
+
+# ─── Components ────────────────────────────────────────────────
+
+api:
+  enabled: true
+  image:
+    repository: kincare-api
+    tag: ""
+  replicaCount: 3
+  port: 4000
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:   { cpu: 1,    memory: 1Gi }
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 12
+    targetCPUUtilizationPercentage: 70
+  env: {}
+  hl7Mllp:
+    enabled: false
+    port: 2575
+    service:
+      type: LoadBalancer
+
+worker:
+  enabled: true
+  image:
+    repository: kincare-worker
+    tag: ""
+  replicaCount: 2
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:   { cpu: 1,    memory: 1Gi }
+
+web:
+  enabled: true
+  image:
+    repository: kincare-web
+    tag: ""
+  replicaCount: 3
+  port: 3000
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+
+# ─── Ingress ────────────────────────────────────────────────────
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 50m
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls: true
+  hosts:
+    - host: app.kincare.health
+      service: web
+      path: /
+    - host: api.kincare.health
+      service: api
+      path: /
+
+# ─── Configuration ──────────────────────────────────────────────
+
+config:
+  # Public envs (non-secret) — rendered into a ConfigMap.
+  NODE_ENV: production
+  PUBLIC_API_URL: https://api.kincare.health
+  PUBLIC_WEB_URL: https://app.kincare.health
+  COOKIE_DOMAIN: kincare.health
+  RATE_LIMIT_WINDOW_MS: "60000"
+  RATE_LIMIT_MAX: "120"
+  LOGIN_RATE_LIMIT_MAX: "10"
+  LOGIN_RATE_LIMIT_MAX_EMAIL: "5"
+  LOGIN_RATE_LIMIT_WINDOW_S: "300"
+  ALERT_FAILED_LOGIN_THRESHOLD: "10"
+  ALERT_FAILED_LOGIN_WINDOW_MIN: "5"
+  ALERT_BULK_EXPORT_THRESHOLD: "50"
+  ALERT_OFF_HOURS_START: "22"
+  ALERT_OFF_HOURS_END: "6"
+  RETENTION_JOBS_ENABLED: "true"
+  RETENTION_SOFT_DELETE_DAYS: "90"
+  RETENTION_INACTIVE_DAYS: "2555"
+  HL7_MLLP_PORT: "2575"
+  HL7_MLLP_ENABLED: "false"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability:4318
+  OTEL_SERVICE_NAMESPACE: kincare
+  LOG_LEVEL: info
+  # Phase 5
+  DEFAULT_TENANT_ID: default
+  HL7_FLOW_ASYNC: "true"
+  SMART_ACCESS_TTL_SECONDS: "3600"
+
+# Secrets — DO NOT inline real values. Either set existingSecret or rely on
+# external-secrets / sealed-secrets to populate the named Secret out-of-band.
+secrets:
+  existingSecret: kincare-secrets   # if set, chart skips creating its own Secret
+  values: {}
+  # Required keys (when chart creates the secret):
+  #   DATABASE_URL, REDIS_URL,
+  #   JWT_ACCESS_SECRET, JWT_REFRESH_SECRET, PASSWORD_PEPPER,
+  #   PHI_KEYS or PHI_ENCRYPTION_KEY,
+  #   CSRF_SECRET,
+  #   S3_ACCESS_KEY, S3_SECRET_KEY,
+  #   ORTHANC_USERNAME, ORTHANC_PASSWORD,
+  #   SMTP_USER, SMTP_PASS, SMS_API_KEY
+
+# ─── Observability ─────────────────────────────────────────────
+
+observability:
+  podMonitor:
+    enabled: true
+    interval: 30s
+    path: /metrics
+
+# ─── Pod hardening ─────────────────────────────────────────────
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  fsGroup: 10001
+  seccompProfile: { type: RuntimeDefault }
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop: [ALL]
+
+networkPolicy:
+  enabled: true
+
+# ─── Postgres backups ──────────────────────────────────────────
+# Logical pg_dump → S3 with Object Lock (GOVERNANCE) retention.
+# For sub-minute RPO, layer continuous WAL archival (pgBackRest / wal-g).
+# IMPORTANT: target bucket must have Object Lock enabled at creation time.
+
+backup:
+  enabled: false
+  schedule: "17 2 * * *"           # 02:17 UTC daily
+  image: ghcr.io/your-org/kincare-pg-backup:16
+  bucket: kincare-pg-backups
+  prefix: kincare/postgres
+  retentionDays: 35
+  region: us-east-1
