@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "npm install -g pnpm@9.7.0 && NODE_ENV=development pnpm install --frozen-lockfile && pnpm --filter @kincare/db build && pnpm --filter @kincare/web... build",
+  "buildCommand": "npm install -g pnpm@9.7.0 && NODE_ENV=development pnpm install --frozen-lockfile && pnpm --filter @kincare/web... build",
   "installCommand": "echo 'install handled in buildCommand'",
   "outputDirectory": "apps/web/.next",
   "framework": "nextjs",
