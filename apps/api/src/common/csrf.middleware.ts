@@ -38,10 +38,18 @@ export class CsrfMiddleware implements NestMiddleware {
 
   private readonly secret: string;
   private readonly secureCookie: boolean;
+  private readonly sameSite: 'lax' | 'none' | 'strict';
+  private readonly cookieDomain: string | undefined;
 
   constructor(cfg: ConfigService) {
     this.secret = cfg.getOrThrow('CSRF_SECRET');
     this.secureCookie = cfg.get('NODE_ENV') === 'production';
+    // Cross-domain deployments (Vercel web ↔ Render API) require
+    // SameSite=None;Secure or the browser drops the cookie. Set
+    // COOKIE_SAMESITE=none in production to enable that.
+    const ss = (cfg.get<string>('COOKIE_SAMESITE') ?? 'lax').toLowerCase();
+    this.sameSite = ss === 'none' || ss === 'strict' ? ss : 'lax';
+    this.cookieDomain = cfg.get<string>('COOKIE_DOMAIN') || undefined;
   }
 
   use(req: Request, res: Response, next: NextFunction): void {
@@ -54,11 +62,14 @@ export class CsrfMiddleware implements NestMiddleware {
     if (CsrfMiddleware.SAFE_METHODS.has(req.method)) {
       if (!req.cookies?.[CsrfMiddleware.COOKIE]) {
         const token = this.mintToken();
+        // SameSite=None requires Secure per spec; force it regardless of env.
+        const secure = this.secureCookie || this.sameSite === 'none';
         res.cookie(CsrfMiddleware.COOKIE, token, {
           httpOnly: false,           // must be readable by SPA to echo back
-          sameSite: 'lax',
-          secure: this.secureCookie,
+          sameSite: this.sameSite,
+          secure,
           path: '/',
+          domain: this.cookieDomain,
         });
       }
       return next();

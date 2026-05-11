@@ -9,6 +9,7 @@ import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { startInlineWorkers } from '@kincare/worker';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
@@ -16,8 +17,11 @@ async function bootstrap() {
 
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(cookieParser());
+  // CORS_ORIGIN supports a comma-separated list. Falls back to PUBLIC_WEB_URL
+  // for backwards-compat. Accept `true` (reflect origin) only when neither set.
+  const corsOriginEnv = process.env.CORS_ORIGIN ?? process.env.PUBLIC_WEB_URL;
   app.enableCors({
-    origin: process.env.PUBLIC_WEB_URL?.split(',') ?? true,
+    origin: corsOriginEnv ? corsOriginEnv.split(',').map((s) => s.trim()) : true,
     credentials: true,
   });
 
@@ -47,6 +51,25 @@ async function bootstrap() {
   const port = Number(process.env.PORT ?? process.env.API_PORT ?? 4000);
   await app.listen(port, '0.0.0.0');
   logger.log(`🚑 Kincare API listening on port ${port}`);
+
+  // Free-tier deployments (Render free, Fly nano) can't run a separate worker
+  // dyno, so run the BullMQ workers inside this process.
+  if (process.env.RUN_WORKERS_INLINE === 'true') {
+    const handle = startInlineWorkers({
+      enablePdf: process.env.WORKERS_ENABLE_PDF === 'true',
+      skipHl7: process.env.WORKERS_SKIP_HL7 === 'true',
+    });
+    if (handle) {
+      const shutdown = async () => {
+        logger.log('Shutting down inline workers…');
+        await handle.shutdown();
+        await app.close();
+        process.exit(0);
+      };
+      process.on('SIGTERM', shutdown);
+      process.on('SIGINT', shutdown);
+    }
+  }
 }
 
 bootstrap();

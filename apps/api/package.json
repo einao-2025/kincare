@@ -18,6 +18,7 @@
     "@kincare/hl7": "workspace:*",
     "@kincare/notifications": "workspace:*",
     "@kincare/shared": "workspace:*",
+    "@kincare/worker": "workspace:*",
     "@nestjs/common": "^10.4.1",
     "@nestjs/config": "^3.2.3",
     "@nestjs/core": "^10.4.1",

@@ -2,6 +2,8 @@
   "name": "@kincare/worker",
   "version": "0.1.0",
   "private": true,
+  "main": "src/inline.ts",
+  "types": "src/inline.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/main.ts",
