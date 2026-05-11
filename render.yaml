@@ -28,7 +28,7 @@ services:
     rootDir: .
     buildCommand: |
       npm install -g pnpm@9.7.0
-      pnpm install --frozen-lockfile
+      NODE_ENV=development pnpm install --frozen-lockfile
       pnpm --filter @kincare/db build
       pnpm --filter @kincare/api... build
       pnpm --filter @kincare/worker build
