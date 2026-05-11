@@ -5,7 +5,7 @@
   "description": "Kincare — Hospital Patient Portal & Healthcare Interoperability Platform",
   "packageManager": "pnpm@9.7.0",
   "engines": {
-    "node": ">=20.11.0",
+    "node": ">=20.11.0 <21",
     "pnpm": ">=9.0.0"
   },
   "scripts": {

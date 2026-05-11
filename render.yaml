@@ -27,8 +27,7 @@ services:
     region: oregon
     rootDir: .
     buildCommand: |
-      corepack enable
-      corepack prepare pnpm@9.7.0 --activate
+      npm install -g pnpm@9.7.0
       pnpm install --frozen-lockfile
       pnpm --filter @kincare/db build
       pnpm --filter @kincare/api... build
