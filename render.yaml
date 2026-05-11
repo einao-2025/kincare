@@ -1,0 +1,127 @@
+################################################################################
+# Kincare — Render Blueprint
+#
+# Provisions four resources from this monorepo:
+#   • kincare-api      — NestJS HTTP API (apps/api)
+#   • kincare-web      — Next.js patient + staff portal (apps/web)
+#   • kincare-worker   — BullMQ background worker (apps/worker)
+#   • kincare-db       — Managed Postgres (Prisma migrations run pre-deploy)
+#
+# REDIS is NOT defined here because Render's free Key Value (Redis) add-on
+# isn't fully blueprint-able across all account tiers. Create it manually in
+# the dashboard, copy the connection string, and set REDIS_URL on the api +
+# worker services (env group `kincare-shared` already has a placeholder).
+#
+# Memory: Nest + Prisma + OpenTelemetry won't reliably fit in 512 MB. The
+# `starter` plan is also 512 MB; bump the API to `standard` if you hit OOM
+# again. Web + worker are fine on starter.
+################################################################################
+
+databases:
+  - name: kincare-db
+    plan: free
+    databaseName: kincare
+    ipAllowList: []           # Only Render-internal connections.
+
+envVarGroups:
+  - name: kincare-shared
+    envVars:
+      # Filled in by Render when the blueprint provisions the DB.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: kincare-db
+          property: connectionString
+      # Manually set this after creating a Redis add-on in the Render dashboard
+      # (or paste an Upstash redis:// URL).
+      - key: REDIS_URL
+        sync: false
+      - key: REDIS_QUEUE_PREFIX
+        value: kincare
+
+      # Auth secrets — auto-generated, never logged.
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: CSRF_SECRET
+        generateValue: true
+      - key: PASSWORD_PEPPER
+        generateValue: true
+      # PHI key needs to be >= 40 chars. Render's generateValue is 64 hex chars.
+      - key: PHI_ENCRYPTION_KEY
+        generateValue: true
+
+      - key: NODE_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      - key: OTEL_DISABLED
+        value: "true"          # Flip to "false" once you wire up a collector.
+      - key: METRICS_ENABLED
+        value: "true"
+      - key: HL7_MLLP_ENABLED
+        value: "false"
+
+services:
+  # ─────────────────────────── API ────────────────────────────
+  - type: web
+    name: kincare-api
+    runtime: node
+    plan: starter              # Upgrade to `standard` if you hit OOM.
+    region: oregon
+    rootDir: .
+    buildCommand: |
+      corepack enable
+      corepack prepare pnpm@9.7.0 --activate
+      pnpm install --frozen-lockfile
+      pnpm --filter @kincare/api... build
+    startCommand: pnpm --filter @kincare/api start
+    preDeployCommand: pnpm --filter @kincare/db prisma:deploy
+    healthCheckPath: /health
+    envVars:
+      - fromGroup: kincare-shared
+      - key: API_PORT
+        sync: false             # Render injects PORT; main.ts now prefers PORT.
+      - key: PUBLIC_API_URL
+        # NOTE: After first deploy, replace this with the real onrender.com URL.
+        value: https://kincare-api.onrender.com
+      - key: PUBLIC_WEB_URL
+        value: https://kincare-web.onrender.com
+      - key: COOKIE_DOMAIN
+        value: onrender.com     # Allows the csrf cookie to be sent web→api.
+
+  # ─────────────────────────── WEB ────────────────────────────
+  - type: web
+    name: kincare-web
+    runtime: node
+    plan: starter
+    region: oregon
+    rootDir: .
+    buildCommand: |
+      corepack enable
+      corepack prepare pnpm@9.7.0 --activate
+      pnpm install --frozen-lockfile
+      pnpm --filter @kincare/web... build
+    startCommand: pnpm --filter @kincare/web start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_API_URL
+        value: https://kincare-api.onrender.com
+      # Next.js reads PORT automatically; no API_PORT needed here.
+
+  # ────────────────────────── WORKER ──────────────────────────
+  - type: worker
+    name: kincare-worker
+    runtime: node
+    plan: starter
+    region: oregon
+    rootDir: .
+    buildCommand: |
+      corepack enable
+      corepack prepare pnpm@9.7.0 --activate
+      pnpm install --frozen-lockfile
+      pnpm --filter @kincare/worker... build
+    startCommand: pnpm --filter @kincare/worker start
+    envVars:
+      - fromGroup: kincare-shared

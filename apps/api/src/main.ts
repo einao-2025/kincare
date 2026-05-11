@@ -44,9 +44,9 @@ async function bootstrap() {
   const doc = SwaggerModule.createDocument(app, swagger);
   SwaggerModule.setup('api/docs', app, doc);
 
-  const port = Number(process.env.API_PORT ?? 4000);
-  await app.listen(port);
-  logger.log(`🚑 Kincare API listening on http://localhost:${port}`);
+  const port = Number(process.env.PORT ?? process.env.API_PORT ?? 4000);
+  await app.listen(port, '0.0.0.0');
+  logger.log(`🚑 Kincare API listening on port ${port}`);
 }
 
 bootstrap();
