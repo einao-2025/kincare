@@ -32,6 +32,7 @@ services:
       pnpm --filter @kincare/api... build
     startCommand: |
       pnpm --filter @kincare/db prisma:deploy
+      if [ "$SEED_ON_START" = "true" ]; then pnpm --filter @kincare/db seed; fi
       pnpm --filter @kincare/api start
     healthCheckPath: /health
     envVars:
