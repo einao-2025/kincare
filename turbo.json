@@ -6,6 +6,10 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
+    "@kincare/db#build": {
+      "inputs": ["prisma/schema.prisma", "package.json"],
+      "outputs": []
+    },
     "dev": {
       "cache": false,
       "persistent": true

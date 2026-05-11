@@ -21,7 +21,7 @@ export function startNotificationsWorker({ connection, prefix, logger }: Opts) {
         where: { id: notificationId },
         include: { user: true },
       });
-      let result;
+      let result: { ok: boolean; externalId?: string; error?: string };
       switch (notif.channel) {
         case 'EMAIL':
           result = await dispatcher.email({
@@ -36,6 +36,8 @@ export function startNotificationsWorker({ connection, prefix, logger }: Opts) {
         case 'PUSH':
           result = { ok: true, externalId: 'in-app' };
           break;
+        default:
+          throw new Error(`Unsupported notification channel: ${notif.channel as string}`);
       }
       await prisma.notification.update({
         where: { id: notif.id },
