@@ -13,6 +13,7 @@ import { CsrfMiddleware } from './common/csrf.middleware';
 import { FlowsModule } from './common/flows/flows.module';
 import { TenantModule } from './common/tenant/tenant.module';
 import { TenantMiddleware } from './common/tenant/tenant.middleware';
+import { StorageModule } from './common/storage/storage.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AlertsModule } from './modules/alerts/alerts.module';
 import { RetentionModule } from './modules/retention/retention.module';
@@ -57,6 +58,7 @@ import { AuditInterceptor } from './common/interceptors/audit.interceptor';
     RedisModule,
     FlowsModule,
     TenantModule,
+    StorageModule,
     AuditModule,
     AlertsModule,
     RetentionModule,

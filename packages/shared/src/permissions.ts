@@ -102,6 +102,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     P.PATIENT_READ_ANY,
     P.AUDIT_READ,
     P.ADMIN_USERS,
+    P.RESULTS_UPLOAD,
   ],
   [Roles.SUPER_ADMIN]: Object.values(P),
 };

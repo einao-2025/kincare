@@ -44,10 +44,14 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
   }
   const csrf = !SAFE_METHODS.has(method) ? readCookie(CSRF_COOKIE) : null;
 
+  // When the body is FormData (file upload) we let the browser set the
+  // multipart boundary, so we must not pre-populate Content-Type ourselves.
+  const isFormData = typeof FormData !== 'undefined' && rest.body instanceof FormData;
+
   const init: RequestInit = {
     ...rest,
     headers: {
-      'Content-Type': 'application/json',
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(csrf ? { 'X-CSRF-Token': csrf } : {}),
       ...(headers ?? {}),

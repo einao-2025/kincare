@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, Post, Res } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { BadRequestException, Body, Controller, Get, Param, Post, Res, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import { FilesInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { Permissions, Roles as R } from '@kincare/shared';
 import type { Response } from 'express';
 import { ResultsService } from './results.service';
@@ -19,7 +20,7 @@ export class ResultsController {
   ) {}
 
   @Post('reports')
-  @Roles(R.DOCTOR, R.LAB_TECHNICIAN, R.RADIOLOGIST, R.SUPER_ADMIN)
+  @Roles(R.DOCTOR, R.LAB_TECHNICIAN, R.RADIOLOGIST, R.HOSPITAL_ADMIN, R.SUPER_ADMIN)
   @RequirePermissions(Permissions.RESULTS_UPLOAD)
   @Audit({ action: 'CREATE', resourceType: 'DiagnosticReport' })
   createReport(@CurrentUser() actor: AuthPrincipal, @Body() dto: CreateDiagnosticReportDto) {
@@ -52,7 +53,7 @@ export class ResultsController {
   }
 
   @Post('lab')
-  @Roles(R.LAB_TECHNICIAN, R.DOCTOR, R.SUPER_ADMIN)
+  @Roles(R.LAB_TECHNICIAN, R.DOCTOR, R.HOSPITAL_ADMIN, R.SUPER_ADMIN)
   @RequirePermissions(Permissions.RESULTS_UPLOAD)
   @Audit({ action: 'CREATE', resourceType: 'TestResult' })
   createTestResult(@Body() dto: CreateTestResultDto) {
@@ -63,5 +64,32 @@ export class ResultsController {
   async listForPatient(@Param('id') id: string, @CurrentUser() actor: AuthPrincipal) {
     const patientId = await this.patients.resolvePatientId(id, actor, 'VIEW_TEST_RESULTS');
     return this.results.listForPatient(patientId);
+  }
+
+  /**
+   * Attach one or more files (images or documents) to an existing diagnostic
+   * report. The actor must hold {@link Permissions.RESULTS_UPLOAD}; the file
+   * bytes are streamed to S3 and a `ReportAttachment` row is persisted per file.
+   */
+  @Post('reports/:reportId/attachments')
+  @Roles(R.DOCTOR, R.LAB_TECHNICIAN, R.RADIOLOGIST, R.HOSPITAL_ADMIN, R.SUPER_ADMIN)
+  @RequirePermissions(Permissions.RESULTS_UPLOAD)
+  @UseInterceptors(FilesInterceptor('files', 10, {
+    limits: { fileSize: 25 * 1024 * 1024 }, // 25 MiB per file
+  }))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { files: { type: 'array', items: { type: 'string', format: 'binary' } } },
+    },
+  })
+  @Audit({ action: 'UPLOAD', resourceType: 'ReportAttachment', resourceIdParam: 'reportId' })
+  async uploadAttachments(
+    @Param('reportId') reportId: string,
+    @UploadedFiles() files: Express.Multer.File[],
+  ) {
+    if (!files?.length) throw new BadRequestException('No files uploaded');
+    return this.results.attachFiles(reportId, files);
   }
 }
