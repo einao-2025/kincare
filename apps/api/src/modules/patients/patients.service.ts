@@ -1,9 +1,10 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { decryptField, encryptField, Permissions, type AuthPrincipal, Roles } from '@kincare/shared';
+import { decryptField, encryptField, generateMRN, hashPassword, Permissions, type AuthPrincipal, Roles } from '@kincare/shared';
+import { UserRole, UserStatus } from '@kincare/db';
 import { PrismaService } from '../../common/prisma/prisma.module';
 import type {
-  CreateAllergyDto, CreateConditionDto, CreateEmergencyContactDto, UpdatePatientProfileDto,
+  CreateAllergyDto, CreateConditionDto, CreateEmergencyContactDto, CreatePatientDto, UpdatePatientProfileDto,
 } from './dto';
 
 @Injectable()
@@ -14,6 +15,64 @@ export class PatientsService {
   ) {}
 
   private get phiKey(): string { return this.cfg.getOrThrow('PHI_ENCRYPTION_KEY'); }
+
+  /**
+   * Admin-driven patient account provisioning. Creates a User + PatientProfile
+   * in the acting admin's tenant using either the supplied password or the
+   * configured `PATIENT_DEFAULT_PASSWORD`. The plaintext password used is
+   * returned so the admin can deliver it to the patient out-of-band; the
+   * patient should rotate it on first login.
+   */
+  async createPatient(dto: CreatePatientDto, actor: AuthPrincipal) {
+    const admin = await this.prisma.user.findUniqueOrThrow({
+      where: { id: actor.userId }, select: { tenantId: true },
+    });
+    const tenantId = admin.tenantId;
+    const email = dto.email.toLowerCase();
+
+    const existing = await this.prisma.user.findUnique({
+      where: { tenantId_email: { tenantId, email } },
+    });
+    if (existing) throw new ConflictException('Email already registered');
+
+    const password = dto.password ?? this.cfg.get<string>('PATIENT_DEFAULT_PASSWORD') ?? 'ChangeMe!1234';
+    const passwordHash = hashPassword(password, this.cfg.get<string>('PASSWORD_PEPPER') ?? '');
+    const seq = (await this.prisma.patientProfile.count({ where: { tenantId } })) + 1;
+
+    const user = await this.prisma.user.create({
+      data: {
+        tenantId,
+        email,
+        phone: dto.phone,
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        passwordHash,
+        role: UserRole.PATIENT,
+        status: UserStatus.PENDING_VERIFICATION,
+        createdById: actor.userId,
+        patientProfile: {
+          create: {
+            tenantId,
+            mrn: generateMRN(seq),
+            dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : new Date('1970-01-01'),
+            gender: dto.gender,
+          },
+        },
+      },
+      include: { patientProfile: { select: { id: true, mrn: true } } },
+    });
+
+    return {
+      id: user.patientProfile!.id,
+      userId: user.id,
+      mrn: user.patientProfile!.mrn,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      defaultPassword: password,
+      passwordSource: dto.password ? ('custom' as const) : ('default' as const),
+    };
+  }
 
   /**
    * Resolves a patientProfile id from either:

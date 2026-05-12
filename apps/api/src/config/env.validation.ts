@@ -16,6 +16,8 @@ export const configValidationSchema = z.object({
   JWT_REFRESH_TTL: z.coerce.number().default(2_592_000),
   MFA_ISSUER: z.string().default('Kincare'),
   PASSWORD_PEPPER: z.string().min(16),
+  /** Default initial password applied to admin-provisioned patient accounts when one is not provided. */
+  PATIENT_DEFAULT_PASSWORD: z.string().min(12).default('ChangeMe!1234'),
 
   PHI_ENCRYPTION_KEY: z.string().min(40).optional(),
   PHI_KEYS: z.string().optional(),

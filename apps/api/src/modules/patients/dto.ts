@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsDateString, IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsDateString, IsEmail, IsEnum, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 import { BloodGroup, Gender, Genotype, RelationshipType } from '@kincare/db';
 
 export class UpdatePatientProfileDto {
@@ -35,4 +35,31 @@ export class CreateConditionDto {
   @ApiProperty() @IsString() display!: string;
   @ApiPropertyOptional() @IsOptional() @IsDateString() onsetDate?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
+}
+
+/**
+ * Admin-driven patient account creation. Issued by HOSPITAL_ADMIN / SUPER_ADMIN
+ * to onboard a patient without self-registration. If `password` is omitted, the
+ * configured `PATIENT_DEFAULT_PASSWORD` is used. The plaintext password used is
+ * returned in the response so the admin can deliver it out-of-band; the patient
+ * should rotate it on first login.
+ */
+export class CreatePatientDto {
+  @ApiProperty() @IsEmail() email!: string;
+  @ApiProperty() @IsString() @MinLength(2) @MaxLength(80) firstName!: string;
+  @ApiProperty() @IsString() @MinLength(2) @MaxLength(80) lastName!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(32) phone?: string;
+  @ApiPropertyOptional() @IsOptional() @IsDateString() dateOfBirth?: string;
+  @ApiPropertyOptional({ enum: Gender }) @IsOptional() @IsEnum(Gender) gender?: Gender;
+
+  /** Optional explicit initial password; otherwise falls back to PATIENT_DEFAULT_PASSWORD. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MinLength(12, { message: 'Password must be at least 12 characters' })
+  @Matches(/[A-Z]/, { message: 'Password must contain an uppercase letter' })
+  @Matches(/[a-z]/, { message: 'Password must contain a lowercase letter' })
+  @Matches(/[0-9]/, { message: 'Password must contain a digit' })
+  @Matches(/[^A-Za-z0-9]/, { message: 'Password must contain a symbol' })
+  password?: string;
 }

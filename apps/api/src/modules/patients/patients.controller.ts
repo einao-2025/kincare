@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Permissions, Roles as R } from '@kincare/shared';
 import { PatientsService } from './patients.service';
 import {
-  CreateAllergyDto, CreateConditionDto, CreateEmergencyContactDto, UpdatePatientProfileDto,
+  CreateAllergyDto, CreateConditionDto, CreateEmergencyContactDto, CreatePatientDto, UpdatePatientProfileDto,
 } from './dto';
 import { Audit, RequirePermissions, Roles } from '../../common/decorators';
 import { CurrentUser } from '../../common/current-user.decorator';
@@ -23,6 +23,18 @@ export class PatientsController {
     @Query('take') take?: string,
   ) {
     return this.patients.search(q ?? '', take ? Math.min(Number(take), 50) : 20);
+  }
+
+  /**
+   * Admin-only: provision a patient account with a default (or supplied)
+   * password. Self-registration goes through `/auth/register` instead.
+   */
+  @Post()
+  @Roles(R.HOSPITAL_ADMIN, R.SUPER_ADMIN)
+  @RequirePermissions(Permissions.PATIENT_UPDATE_ANY)
+  @Audit({ action: 'CREATE', resourceType: 'User' })
+  async create(@Body() dto: CreatePatientDto, @CurrentUser() actor: AuthPrincipal) {
+    return this.patients.createPatient(dto, actor);
   }
 
   @Get(':id')

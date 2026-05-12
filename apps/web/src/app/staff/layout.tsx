@@ -42,6 +42,17 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             <div className="text-[10px] uppercase tracking-wider text-clinical-muted">Clinical staff</div>
           </div>
         </div>
+        {isAdmin && (
+          <Link
+            href="/staff/patients/new"
+            className="mb-3 inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#0a1f44] px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#0d2a5c]"
+          >
+            <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className="h-4 w-4">
+              <path fillRule="evenodd" d="M10 4a1 1 0 011 1v4h4a1 1 0 110 2h-4v4a1 1 0 11-2 0v-4H5a1 1 0 110-2h4V5a1 1 0 011-1z" clipRule="evenodd" />
+            </svg>
+            New patient
+          </Link>
+        )}
         <nav className="space-y-0.5 flex-1">
           {NAV.filter((n) => !n.adminOnly || isAdmin).map((n) => {
             const active = pathname === n.href || (n.href !== '/staff' && pathname?.startsWith(n.href));
