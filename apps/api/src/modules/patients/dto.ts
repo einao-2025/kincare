@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsDateString, IsEmail, IsEnum, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
-import { BloodGroup, Gender, Genotype, RelationshipType } from '@kincare/db';
+import { ArrayNotEmpty, IsArray, IsDateString, IsEmail, IsEnum, IsOptional, IsString, Matches, MaxLength, MinLength, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+import { BloodGroup, Gender, Genotype, PermissionScope, RelationshipType } from '@kincare/db';
 
 export class UpdatePatientProfileDto {
   @ApiPropertyOptional() @IsOptional() @IsDateString() dateOfBirth?: string;
@@ -53,6 +54,42 @@ export class CreatePatientDto {
   @ApiPropertyOptional({ enum: Gender }) @IsOptional() @IsEnum(Gender) gender?: Gender;
 
   /** Optional explicit initial password; otherwise falls back to PATIENT_DEFAULT_PASSWORD. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MinLength(12, { message: 'Password must be at least 12 characters' })
+  @Matches(/[A-Z]/, { message: 'Password must contain an uppercase letter' })
+  @Matches(/[a-z]/, { message: 'Password must contain a lowercase letter' })
+  @Matches(/[0-9]/, { message: 'Password must contain a digit' })
+  @Matches(/[^A-Za-z0-9]/, { message: 'Password must contain a symbol' })
+  password?: string;
+
+  /** Optional family delegate to provision and link at the same time. */
+  @ApiPropertyOptional({ type: () => CreatePatientDelegateDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreatePatientDelegateDto)
+  delegate?: CreatePatientDelegateDto;
+}
+
+/**
+ * Family delegate provisioning sub-DTO. Either links to an existing user with
+ * the given email (within the admin's tenant) or creates a new FAMILY_DELEGATE
+ * user. The delegate receives the listed permission scopes against the new
+ * patient via a `FamilyRelationship` + `PermissionGrant`s — bypassing the
+ * normal invite flow because the admin acts as the authoritative grantor.
+ */
+export class CreatePatientDelegateDto {
+  @ApiProperty() @IsEmail() email!: string;
+  @ApiProperty() @IsString() @MinLength(2) @MaxLength(80) firstName!: string;
+  @ApiProperty() @IsString() @MinLength(2) @MaxLength(80) lastName!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(32) phone?: string;
+  @ApiProperty({ enum: RelationshipType }) @IsEnum(RelationshipType) relation!: RelationshipType;
+  @ApiProperty({ enum: PermissionScope, isArray: true })
+  @IsArray() @ArrayNotEmpty() @IsEnum(PermissionScope, { each: true })
+  scopes!: PermissionScope[];
+
+  /** Optional explicit password; otherwise falls back to PATIENT_DEFAULT_PASSWORD. */
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

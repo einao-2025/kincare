@@ -4,7 +4,7 @@ import { decryptField, encryptField, generateMRN, hashPassword, Permissions, typ
 import { UserRole, UserStatus } from '@kincare/db';
 import { PrismaService } from '../../common/prisma/prisma.module';
 import type {
-  CreateAllergyDto, CreateConditionDto, CreateEmergencyContactDto, CreatePatientDto, UpdatePatientProfileDto,
+  CreateAllergyDto, CreateConditionDto, CreateEmergencyContactDto, CreatePatientDelegateDto, CreatePatientDto, UpdatePatientProfileDto,
 } from './dto';
 
 @Injectable()
@@ -62,6 +62,11 @@ export class PatientsService {
       include: { patientProfile: { select: { id: true, mrn: true } } },
     });
 
+    let delegate: Awaited<ReturnType<PatientsService['provisionDelegateFor']>> | undefined;
+    if (dto.delegate) {
+      delegate = await this.provisionDelegateFor(user.id, tenantId, actor.userId, dto.delegate);
+    }
+
     return {
       id: user.patientProfile!.id,
       userId: user.id,
@@ -71,6 +76,111 @@ export class PatientsService {
       lastName: user.lastName,
       defaultPassword: password,
       passwordSource: dto.password ? ('custom' as const) : ('default' as const),
+      delegate,
+    };
+  }
+
+  /**
+   * Provision (or link to an existing) FAMILY_DELEGATE user, then create an
+   * active FamilyRelationship + PermissionGrants linking them to the given
+   * patient. The admin is recorded as both grantor and creator. Returns the
+   * delegate's identity plus the plaintext password used (only when a new
+   * account was created) so the admin can deliver it out-of-band.
+   */
+  private async provisionDelegateFor(
+    patientUserId: string,
+    tenantId: string,
+    actorUserId: string,
+    dto: CreatePatientDelegateDto,
+  ) {
+    const email = dto.email.toLowerCase();
+
+    // Reuse existing user when possible — but only inside the same tenant.
+    let delegateUser = await this.prisma.user.findUnique({
+      where: { tenantId_email: { tenantId, email } },
+      select: { id: true, email: true, firstName: true, lastName: true, role: true, deletedAt: true },
+    });
+
+    let plaintextPassword: string | undefined;
+    let passwordSource: 'default' | 'custom' | undefined;
+    let created = false;
+
+    if (delegateUser && delegateUser.deletedAt) {
+      throw new ConflictException('Delegate email belongs to a deleted account');
+    }
+    if (delegateUser && delegateUser.role !== UserRole.FAMILY_DELEGATE && delegateUser.role !== UserRole.PATIENT) {
+      // Refuse to attach a clinical/admin user as a family delegate.
+      throw new ConflictException('Delegate email is already used by a non-family account');
+    }
+
+    if (!delegateUser) {
+      plaintextPassword = dto.password ?? this.cfg.get<string>('PATIENT_DEFAULT_PASSWORD') ?? 'ChangeMe!1234';
+      passwordSource = dto.password ? 'custom' : 'default';
+      const passwordHash = hashPassword(plaintextPassword, this.cfg.get<string>('PASSWORD_PEPPER') ?? '');
+      const newUser = await this.prisma.user.create({
+        data: {
+          tenantId,
+          email,
+          phone: dto.phone,
+          firstName: dto.firstName,
+          lastName: dto.lastName,
+          passwordHash,
+          role: UserRole.FAMILY_DELEGATE,
+          status: UserStatus.PENDING_VERIFICATION,
+          createdById: actorUserId,
+        },
+        select: { id: true, email: true, firstName: true, lastName: true, role: true },
+      });
+      delegateUser = { ...newUser, deletedAt: null };
+      created = true;
+    }
+
+    // Establish the relationship + grants in one transaction. The admin acts
+    // as both grantor (authoritative) and creator on every grant row.
+    await this.prisma.$transaction(async (tx) => {
+      const rel = await tx.familyRelationship.upsert({
+        where: {
+          patientUserId_delegateUserId: {
+            patientUserId,
+            delegateUserId: delegateUser!.id,
+          },
+        },
+        update: { revokedAt: null, relation: dto.relation },
+        create: {
+          patientUserId,
+          delegateUserId: delegateUser!.id,
+          relation: dto.relation,
+        },
+      });
+      // Revoke any scopes not in the new set, then upsert each requested scope.
+      await tx.permissionGrant.updateMany({
+        where: { relationshipId: rel.id, scope: { notIn: dto.scopes }, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      for (const scope of dto.scopes) {
+        await tx.permissionGrant.upsert({
+          where: { relationshipId_scope: { relationshipId: rel.id, scope } },
+          update: { revokedAt: null, grantorUserId: actorUserId, granteeUserId: delegateUser!.id },
+          create: {
+            relationshipId: rel.id,
+            scope,
+            grantorUserId: actorUserId,
+            granteeUserId: delegateUser!.id,
+          },
+        });
+      }
+    });
+
+    return {
+      userId: delegateUser.id,
+      email: delegateUser.email,
+      firstName: delegateUser.firstName,
+      lastName: delegateUser.lastName,
+      relation: dto.relation,
+      scopes: dto.scopes,
+      created,
+      defaultPassword: plaintextPassword,
+      passwordSource,
     };
   }
 
